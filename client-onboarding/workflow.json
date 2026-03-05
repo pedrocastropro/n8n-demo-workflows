@@ -1,0 +1,301 @@
+{
+  "id": "client-onboarding-001",
+  "name": "Client Onboarding",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "client-onboarding",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-node",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "client-onboarding"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: \"ok\", message: \"Onboarding started\" }) }}",
+        "options": {}
+      },
+      "id": "respond-node",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1QFJSbu_fwomf9ajhQrjEIBjbwTYTT31ULkrbfbTXpdI"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Clients"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Name": "={{ $('Webhook').item.json.body.name }}",
+            "Email": "={{ $('Webhook').item.json.body.email }}",
+            "Company": "={{ $('Webhook').item.json.body.company }}",
+            "Plan": "={{ $('Webhook').item.json.body.plan }}",
+            "Onboarding Date": "={{ $now.toISODate() }}",
+            "Status": "Active"
+          },
+          "matchingColumns": ["Email"],
+          "schema": [
+            { "id": "Name", "displayName": "Name", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "Email", "displayName": "Email", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "Company", "displayName": "Company", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "Plan", "displayName": "Plan", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "Onboarding Date", "displayName": "Onboarding Date", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "Status", "displayName": "Status", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true }
+          ]
+        },
+        "options": {}
+      },
+      "id": "sheets-node",
+      "name": "Google Sheets - Add Client",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [440, 0],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "cred-google-sheets",
+          "name": "Google Sheets OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "name": "={{ $('Webhook').item.json.body.company }} - {{ $('Webhook').item.json.body.name }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "options": {}
+      },
+      "id": "drive-node",
+      "name": "Google Drive - Create Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [660, 0],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "cred-google-drive",
+          "name": "Google Drive OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Webhook').item.json.body.email }}",
+        "subject": "=Welcome to {{ $('Webhook').item.json.body.company }}!",
+        "emailType": "html",
+        "message": "=<h2>Welcome aboard, {{ $('Webhook').item.json.body.name }}!</h2>\n<p>We're thrilled to have <strong>{{ $('Webhook').item.json.body.company }}</strong> on the <strong>{{ $('Webhook').item.json.body.plan }}</strong> plan.</p>\n<p>Over the next few days, we'll send you everything you need to get started. In the meantime, here's what you can expect:</p>\n<ul>\n  <li>A dedicated folder has been created for your team in Google Drive.</li>\n  <li>Your account details have been recorded and our team has been notified.</li>\n  <li>You'll receive step-by-step guides to help you hit the ground running.</li>\n</ul>\n<p>If you have any questions, just reply to this email — we're here to help!</p>\n<p>Best regards,<br>The Onboarding Team</p>",
+        "options": {}
+      },
+      "id": "gmail-welcome",
+      "name": "Gmail - Welcome Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cred-gmail",
+          "name": "Gmail OAuth2"
+        }
+      },
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "amount": 2,
+        "unit": "days"
+      },
+      "id": "wait-2-days",
+      "name": "Wait 2 Days",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1100, 0]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Webhook').item.json.body.email }}",
+        "subject": "Getting started — your first steps",
+        "emailType": "html",
+        "message": "=<h2>Ready to dive in, {{ $('Webhook').item.json.body.name }}?</h2>\n<p>Now that you've had a moment to settle in, here are your first steps to get the most out of your <strong>{{ $('Webhook').item.json.body.plan }}</strong> plan:</p>\n<ol>\n  <li><strong>Explore your workspace</strong> — Check out the Google Drive folder we created for {{ $('Webhook').item.json.body.company }}. It's your central hub for documents and resources.</li>\n  <li><strong>Set up your profile</strong> — Complete your account profile so your team can find and collaborate with you easily.</li>\n  <li><strong>Invite your team</strong> — Collaboration is better together! Add your colleagues so everyone can get started.</li>\n  <li><strong>Check out our guides</strong> — We have step-by-step tutorials to help you make the most of every feature.</li>\n</ol>\n<p>Need a hand? Reply to this email and we'll be happy to assist.</p>\n<p>Cheers,<br>The Onboarding Team</p>",
+        "options": {}
+      },
+      "id": "gmail-getting-started",
+      "name": "Gmail - Getting Started",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cred-gmail",
+          "name": "Gmail OAuth2"
+        }
+      },
+      "position": [1320, 0]
+    },
+    {
+      "parameters": {
+        "amount": 3,
+        "unit": "days"
+      },
+      "id": "wait-3-days",
+      "name": "Wait 3 Days",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1540, 0]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Webhook').item.json.body.email }}",
+        "subject": "How's everything going?",
+        "emailType": "html",
+        "message": "=<h2>Hi {{ $('Webhook').item.json.body.name }},</h2>\n<p>It's been about a week since {{ $('Webhook').item.json.body.company }} joined us, and we wanted to check in!</p>\n<p>We'd love to hear how things are going:</p>\n<ul>\n  <li>Were you able to set everything up smoothly?</li>\n  <li>Is there anything you need help with?</li>\n  <li>Do you have any feedback for us?</li>\n</ul>\n<p>Our support team is always available if you run into any issues. Just reply to this email or reach out to our support channel.</p>\n<p>We're committed to making sure you get the most out of your <strong>{{ $('Webhook').item.json.body.plan }}</strong> plan.</p>\n<p>Best,<br>The Onboarding Team</p>",
+        "options": {}
+      },
+      "id": "gmail-checkin",
+      "name": "Gmail - Check-in",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cred-gmail",
+          "name": "Gmail OAuth2"
+        }
+      },
+      "position": [1760, 0]
+    },
+    {
+      "parameters": {
+        "content": "## Client Onboarding\n\nAutomates the full welcome process for new clients.\n\nTrigger: POST /client-onboarding\nPayload: { name, email, company, plan }\n\nWhat happens:\n1. Responds 200 OK immediately\n2. Saves client data to Google Sheets\n3. Creates a Drive folder: [Company] - [Name]\n4. Sends 3 emails over 5 days:\n   - Day 0: Welcome\n   - Day 2: Getting started\n   - Day 5: Check-in\n\nCredentials: Google Sheets, Drive, and Gmail OAuth2\n\nTest it:\ncurl -X POST http://localhost:5678/webhook-test/client-onboarding \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"name\":\"Test\",\"email\":\"test@test.com\",\"company\":\"Acme\",\"plan\":\"Pro\"}'",
+        "width": 440,
+        "height": 520
+      },
+      "id": "note-node",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-520, -200]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond to Webhook": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets - Add Client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Sheets - Add Client": {
+      "main": [
+        [
+          {
+            "node": "Google Drive - Create Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Drive - Create Folder": {
+      "main": [
+        [
+          {
+            "node": "Gmail - Welcome Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail - Welcome Email": {
+      "main": [
+        [
+          {
+            "node": "Wait 2 Days",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 2 Days": {
+      "main": [
+        [
+          {
+            "node": "Gmail - Getting Started",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail - Getting Started": {
+      "main": [
+        [
+          {
+            "node": "Wait 3 Days",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 3 Days": {
+      "main": [
+        [
+          {
+            "node": "Gmail - Check-in",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "active": false,
+  "versionId": "1"
+}

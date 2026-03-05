@@ -1,0 +1,562 @@
+{
+  "id": "trigger-scheduled-feedback-pipeline",
+  "name": "Customer Feedback Pipeline & Daily Digest",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "feedback",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b2c1d002-0001-4000-8000-000000000001",
+      "name": "📩 Webhook: New Feedback",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "feedback-webhook-id"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "set-received-at",
+              "name": "received_at",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            },
+            {
+              "id": "set-feedback-id",
+              "name": "feedback_id",
+              "value": "={{ 'FB_' + $now.toMillis() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "b2c1d002-0001-4000-8000-000000000002",
+      "name": "📋 Add Metadata",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": "https://docs.google.com/spreadsheets/d/YOUR_SPREADSHEET_ID/edit"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gid=0",
+          "cachedResultName": "Feedback"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        },
+        "options": {}
+      },
+      "id": "b2c1d002-0001-4000-8000-000000000003",
+      "name": "📊 Sheets: Save Feedback",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [680, 300],
+      "credentials": {
+        "googleApi": {
+          "id": "cred-google-sheets",
+          "name": "Google Sheets Service Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-urgent",
+              "leftValue": "={{ $json.rating }}",
+              "rightValue": 2,
+              "operator": {
+                "type": "number",
+                "operation": "lte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b2c1d002-0001-4000-8000-000000000004",
+      "name": "🚨 Urgent? (Rating ≤ 2)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [920, 220]
+    },
+    {
+      "parameters": {
+        "channel": "#feedback-alerts",
+        "text": "=🔴 *Urgent Feedback Received*\n\n👤 *{{ $json.name }}* ({{ $json.email }})\n⭐ Rating: {{ $json.rating }}/5\n💬 {{ $json.message }}\n📌 Source: {{ $json.source }}\n🆔 {{ $json.feedback_id }}",
+        "otherOptions": {}
+      },
+      "id": "b2c1d002-0001-4000-8000-000000000005",
+      "name": "🔴 Slack: Urgent Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1160, 140],
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "cred-slack",
+          "name": "Slack OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "channel": "#feedback-log",
+        "text": "=📝 *New Feedback*\n\n👤 {{ $json.name }} — ⭐ {{ $json.rating }}/5\n💬 {{ $json.message }}\n📌 Source: {{ $json.source }}",
+        "otherOptions": {}
+      },
+      "id": "b2c1d002-0001-4000-8000-000000000006",
+      "name": "💬 Slack: Log Entry",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1160, 320],
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "cred-slack",
+          "name": "Slack OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "b2c1d002-0001-4000-8000-000000000007",
+      "name": "✅ Respond: OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [920, 440]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * *"
+            }
+          ]
+        }
+      },
+      "id": "b2c1d002-0001-4000-8000-000000000008",
+      "name": "⏰ Daily at 9:00 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 720]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": "https://docs.google.com/spreadsheets/d/YOUR_SPREADSHEET_ID/edit"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gid=0",
+          "cachedResultName": "Feedback"
+        },
+        "options": {}
+      },
+      "id": "b2c1d002-0001-4000-8000-000000000009",
+      "name": "📊 Sheets: Read All Feedback",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [460, 720],
+      "credentials": {
+        "googleApi": {
+          "id": "cred-google-sheets",
+          "name": "Google Sheets Service Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Aggregate yesterday's feedback into a daily digest\nconst now = new Date();\nconst yesterday = new Date(now);\nyesterday.setDate(yesterday.getDate() - 1);\nconst startOfYesterday = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate());\nconst endOfYesterday = new Date(startOfYesterday);\nendOfYesterday.setDate(endOfYesterday.getDate() + 1);\n\nconst allItems = $input.all();\nconst yesterdayItems = allItems.filter(item => {\n  const receivedAt = new Date(item.json.received_at);\n  return receivedAt >= startOfYesterday && receivedAt < endOfYesterday;\n});\n\nif (yesterdayItems.length === 0) {\n  return [{ json: { count: 0, has_data: false } }];\n}\n\nconst ratings = yesterdayItems.map(i => Number(i.json.rating)).filter(r => !isNaN(r));\nconst avgRating = ratings.length > 0\n  ? (ratings.reduce((a, b) => a + b, 0) / ratings.length).toFixed(1)\n  : 'N/A';\n\nconst urgent = yesterdayItems.filter(i => Number(i.json.rating) <= 2);\nconst positive = yesterdayItems.filter(i => Number(i.json.rating) >= 4);\n\nconst sources = {};\nyesterdayItems.forEach(i => {\n  const src = i.json.source || 'Unknown';\n  sources[src] = (sources[src] || 0) + 1;\n});\nconst sourceSummary = Object.entries(sources)\n  .map(([k, v]) => `${k}: ${v}`)\n  .join(', ');\n\nreturn [{\n  json: {\n    has_data: true,\n    count: yesterdayItems.length,\n    avg_rating: avgRating,\n    urgent_count: urgent.length,\n    positive_count: positive.length,\n    sources: sourceSummary,\n    date: startOfYesterday.toISOString().split('T')[0],\n    highlights: yesterdayItems.slice(0, 3).map(i => ({\n      name: i.json.name,\n      rating: i.json.rating,\n      message: (i.json.message || '').substring(0, 100)\n    }))\n  }\n}];"
+      },
+      "id": "b2c1d002-0001-4000-8000-000000000010",
+      "name": "⚙️ Aggregate Yesterday",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 720]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-has-data",
+              "leftValue": "={{ $json.has_data }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b2c1d002-0001-4000-8000-000000000011",
+      "name": "📊 Has Feedback?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [920, 720]
+    },
+    {
+      "parameters": {
+        "channel": "#daily-reports",
+        "text": "=📈 *Daily Feedback Digest — {{ $json.date }}*\n\n📊 *{{ $json.count }}* responses received\n⭐ Average Rating: *{{ $json.avg_rating }}/5*\n🔴 Urgent (≤2): {{ $json.urgent_count }}\n🟢 Positive (≥4): {{ $json.positive_count }}\n📌 Sources: {{ $json.sources }}\n\n*Top Highlights:*\n{{ $json.highlights.map(h => '• ' + h.name + ' (' + h.rating + '/5): \"' + h.message + '\"').join('\\n') }}",
+        "otherOptions": {}
+      },
+      "id": "b2c1d002-0001-4000-8000-000000000012",
+      "name": "📈 Slack: Daily Digest",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1160, 640],
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "cred-slack",
+          "name": "Slack OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "channel": "#daily-reports",
+        "text": "=📈 *Daily Feedback Digest — {{ $now.minus(1, 'day').format('yyyy-MM-dd') }}*\n\n📭 No feedback received yesterday.\nAll quiet on the feedback front!",
+        "otherOptions": {}
+      },
+      "id": "b2c1d002-0001-4000-8000-000000000013",
+      "name": "📭 Slack: No Data",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1160, 820],
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "cred-slack",
+          "name": "Slack OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Customer Feedback Pipeline and Daily Digest\n\nTwo trigger types in one workflow.\n\nReal-time path (Webhook):\n1. Receives form submissions via POST /webhook/feedback\n2. Adds timestamp and feedback ID\n3. Saves to Google Sheets\n4. Routes by urgency: rating 1-2 goes to alerts, 3-5 to log\n5. Responds 200 OK to the caller\n\nDaily digest path (Schedule):\n1. Runs every day at 9:00 AM\n2. Reads all feedback from Sheets\n3. Filters yesterday's entries and aggregates stats\n4. Posts a summary to Slack\n\nWebhook body: { name, email, rating, message, source }",
+        "width": 460,
+        "height": 460,
+        "color": 4
+      },
+      "id": "b2c1d002-0001-4000-8000-000000000014",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [100, -100]
+    },
+    {
+      "parameters": {
+        "content": "### Daily Digest Logic\n\nFilters feedback to yesterday only, then calculates:\n- Average rating\n- Urgent count (rating 1-2)\n- Positive count (rating 4-5)\n- Breakdown by source\n- Top 3 highlights\n\nIf nothing came in yesterday, sends\nan \"all quiet\" message instead.",
+        "width": 280,
+        "height": 260,
+        "color": 5
+      },
+      "id": "b2c1d002-0001-4000-8000-000000000015",
+      "name": "Sticky Note1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [580, 880]
+    },
+    {
+      "parameters": {
+        "content": "### Urgency Routing\n\nRating 1-2 -> #feedback-alerts\nNeeds immediate team attention\n\nRating 3-5 -> #feedback-log\nStandard logging, no action needed",
+        "width": 260,
+        "height": 180,
+        "color": 3
+      },
+      "id": "b2c1d002-0001-4000-8000-000000000016",
+      "name": "Sticky Note2",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [820, -20]
+    }
+  ],
+  "connections": {
+    "📩 Webhook: New Feedback": {
+      "main": [
+        [
+          {
+            "node": "📋 Add Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📋 Add Metadata": {
+      "main": [
+        [
+          {
+            "node": "📊 Sheets: Save Feedback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📊 Sheets: Save Feedback": {
+      "main": [
+        [
+          {
+            "node": "🚨 Urgent? (Rating ≤ 2)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "✅ Respond: OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🚨 Urgent? (Rating ≤ 2)": {
+      "main": [
+        [
+          {
+            "node": "🔴 Slack: Urgent Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "💬 Slack: Log Entry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⏰ Daily at 9:00 AM": {
+      "main": [
+        [
+          {
+            "node": "📊 Sheets: Read All Feedback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📊 Sheets: Read All Feedback": {
+      "main": [
+        [
+          {
+            "node": "⚙️ Aggregate Yesterday",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚙️ Aggregate Yesterday": {
+      "main": [
+        [
+          {
+            "node": "📊 Has Feedback?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📊 Has Feedback?": {
+      "main": [
+        [
+          {
+            "node": "📈 Slack: Daily Digest",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "📭 Slack: No Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {
+    "📩 Webhook: New Feedback": [
+      {
+        "json": {
+          "name": "Laura Martinez",
+          "email": "laura@acme.com",
+          "rating": 1,
+          "message": "The checkout process froze twice. Very frustrating experience.",
+          "source": "Website Widget"
+        }
+      },
+      {
+        "json": {
+          "name": "Tom Wilson",
+          "email": "tom@startup.io",
+          "rating": 5,
+          "message": "Incredible onboarding flow! Setup took less than 5 minutes.",
+          "source": "In-App Survey"
+        }
+      },
+      {
+        "json": {
+          "name": "Priya Sharma",
+          "email": "priya@bigcorp.com",
+          "rating": 3,
+          "message": "Decent product but the documentation could use more examples.",
+          "source": "Email Campaign"
+        }
+      }
+    ],
+    "📊 Sheets: Read All Feedback": [
+      {
+        "json": {
+          "name": "Laura Martinez",
+          "email": "laura@acme.com",
+          "rating": 1,
+          "message": "The checkout process froze twice. Very frustrating experience.",
+          "source": "Website Widget",
+          "received_at": "2026-03-01T14:23:00.000Z",
+          "feedback_id": "FB_1740835380000"
+        }
+      },
+      {
+        "json": {
+          "name": "Tom Wilson",
+          "email": "tom@startup.io",
+          "rating": 5,
+          "message": "Incredible onboarding flow! Setup took less than 5 minutes.",
+          "source": "In-App Survey",
+          "received_at": "2026-03-01T16:45:00.000Z",
+          "feedback_id": "FB_1740843900000"
+        }
+      },
+      {
+        "json": {
+          "name": "Priya Sharma",
+          "email": "priya@bigcorp.com",
+          "rating": 3,
+          "message": "Decent product but the documentation could use more examples.",
+          "source": "Email Campaign",
+          "received_at": "2026-03-01T09:10:00.000Z",
+          "feedback_id": "FB_1740816600000"
+        }
+      },
+      {
+        "json": {
+          "name": "Carlos Ruiz",
+          "email": "carlos@designlab.com",
+          "rating": 4,
+          "message": "Really liking the new dashboard. A few UI tweaks would make it perfect.",
+          "source": "Website Widget",
+          "received_at": "2026-03-01T11:30:00.000Z",
+          "feedback_id": "FB_1740825000000"
+        }
+      },
+      {
+        "json": {
+          "name": "Emily Chen",
+          "email": "emily@techfirm.com",
+          "rating": 2,
+          "message": "API response times are too slow for our use case.",
+          "source": "Support Ticket",
+          "received_at": "2026-03-01T18:00:00.000Z",
+          "feedback_id": "FB_1740848400000"
+        }
+      },
+      {
+        "json": {
+          "name": "Older Entry",
+          "email": "old@test.com",
+          "rating": 5,
+          "message": "This should be filtered out — not from yesterday.",
+          "source": "Website Widget",
+          "received_at": "2026-02-25T10:00:00.000Z",
+          "feedback_id": "FB_1740477600000"
+        }
+      }
+    ],
+    "🔴 Slack: Urgent Alert": [
+      {
+        "json": {
+          "ok": true,
+          "channel": "#feedback-alerts",
+          "ts": "1740835400.000100"
+        }
+      }
+    ],
+    "💬 Slack: Log Entry": [
+      {
+        "json": {
+          "ok": true,
+          "channel": "#feedback-log",
+          "ts": "1740843920.000200"
+        }
+      }
+    ],
+    "📈 Slack: Daily Digest": [
+      {
+        "json": {
+          "ok": true,
+          "channel": "#daily-reports",
+          "ts": "1740898800.000300",
+          "message": "📈 *Daily Feedback Digest — 2026-03-01*\n\n📊 *5* responses received\n⭐ Average Rating: *3.0/5*\n🔴 Urgent (≤2): 2\n🟢 Positive (≥4): 2\n📌 Sources: Website Widget: 2, In-App Survey: 1, Email Campaign: 1, Support Ticket: 1\n\n*Top Highlights:*\n• Laura Martinez (1/5): \"The checkout process froze twice. Very frustrating experience.\"\n• Tom Wilson (5/5): \"Incredible onboarding flow! Setup took less than 5 minutes.\"\n• Priya Sharma (3/5): \"Decent product but the documentation could use more examples.\""
+        }
+      }
+    ]
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 2,
+  "active": false,
+  "versionId": "1"
+}

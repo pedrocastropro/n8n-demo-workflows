@@ -1,0 +1,364 @@
+{
+  "id": "email-analysis-001",
+  "name": "Email Analysis",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger-node",
+      "name": "When clicking 'Execute workflow'",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "filters": {
+          "labelIds": ["INBOX"]
+        }
+      },
+      "id": "get-emails",
+      "name": "Get Emails by Label",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [220, 0],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cred-gmail",
+          "name": "Gmail OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "compare": "selectedFields",
+        "fieldsToCompare": "threadId",
+        "options": {}
+      },
+      "id": "remove-duplicates",
+      "name": "Remove Duplicates",
+      "type": "n8n-nodes-base.removeDuplicates",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "resource": "thread",
+        "operation": "get",
+        "threadId": "={{ $json.threadId }}",
+        "options": {}
+      },
+      "id": "get-threads",
+      "name": "Get Threads",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [660, 0],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cred-gmail",
+          "name": "Gmail OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const allMessages = [];\n\nfor (const item of $input.all()) {\n  const thread = item.json;\n\n  if (thread && Array.isArray(thread.messages)) {\n    const messagesFromThisThread = thread.messages.map(msg => {\n      return {\n        json: {\n          messageId: msg.id,\n          threadId: msg.threadId\n        }\n      };\n    });\n    allMessages.push(...messagesFromThisThread);\n  }\n}\n\nreturn allMessages;"
+      },
+      "id": "thread-parser",
+      "name": "Thread Parser",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "messageId": "={{ $json.messageId }}",
+        "simple": false,
+        "options": {}
+      },
+      "id": "get-messages",
+      "name": "Get Messages",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1100, 0],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cred-gmail",
+          "name": "Gmail OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const threadsMap = new Map();\n\nfor (const item of $input.all()) {\n  const message = item.json;\n  const threadId = message.threadId;\n\n  if (!threadId) continue;\n\n  if (threadsMap.has(threadId)) {\n    threadsMap.get(threadId).messages.push(message);\n  } else {\n    threadsMap.set(threadId, {\n      threadId: threadId,\n      messages: [message]\n    });\n  }\n}\n\nfor (const thread of threadsMap.values()) {\n  thread.messages.sort((a, b) => {\n    return parseInt(a.internalDate) - parseInt(b.internalDate);\n  });\n}\n\nconst finalThreads = Array.from(threadsMap.values());\nreturn finalThreads.map(thread => ({ json: thread }));"
+      },
+      "id": "rebuild-threads",
+      "name": "Rebuild Threads",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 0]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const thread = $json;\n\nif (!thread?.messages?.[0]?.from?.value?.[0]?.address) {\n  return {\n    json: {\n      error: \"Invalid message structure or missing sender address.\",\n      threadId: thread?.threadId || 'unknown'\n    }\n  };\n}\n\n// Configure your support email domains here\nconst supportDomains = ['support@yourcompany.com', '@yourcompany.com'];\n\nfunction isSupport(email) {\n  return supportDomains.some(domain => email.includes(domain));\n}\n\nfunction getCleanText(text) {\n  if (!text) return '';\n  const splitters = [\n    '\\nOn ',\n    '\\nEl ',\n    '\\n\\n-----Original Message-----',\n    '\\n\\n-----Mensaje original-----',\n    '\\nFrom: ',\n  ];\n  let cleanText = text;\n  for (const splitter of splitters) {\n    const position = cleanText.indexOf(splitter);\n    if (position > 0) {\n      cleanText = cleanText.substring(0, position);\n    }\n  }\n  return cleanText.trim();\n}\n\nconst conversationHistory = thread.messages.map(message => {\n  const currentSenderEmail = message?.from?.value?.[0]?.address;\n  const rawBody = message.text || '';\n  const cleanBody = getCleanText(rawBody);\n  const role = isSupport(currentSenderEmail) ? 'support' : 'user';\n  return {\n    role,\n    content: cleanBody,\n    timestamp: message.date || message.timestamp || new Date().toISOString()\n  };\n});\n\nconst firstSenderEmail = thread.messages[0].from.value[0].address;\nconst initiatedBy = isSupport(firstSenderEmail) ? 'support' : 'user';\n\nconst clientEmails = thread.messages\n  .map(m => m.from.value[0].address)\n  .filter(email => !isSupport(email));\nconst identifiedUser = clientEmails[0] || firstSenderEmail;\n\nreturn {\n  json: {\n    threadId: thread.threadId,\n    subject: thread.subject || thread.messages[0]?.subject || 'No subject',\n    initiatedBy: initiatedBy,\n    identifiedUser: identifiedUser,\n    conversationHistory: conversationHistory\n  }\n};"
+      },
+      "id": "format-for-llm",
+      "name": "Format for LLM",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 0]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_SPREADSHEET_ID_HERE",
+          "mode": "id"
+        },
+        "title": "={{ $now.toFormat('yyyyMMddHHmmss') }}",
+        "options": {}
+      },
+      "id": "create-sheet",
+      "name": "Create Analysis Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [1760, 0],
+      "executeOnce": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "cred-google-sheets",
+          "name": "Google Sheets OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    SUMMARY: '',\n    'FULL CONVERSATION': '',\n    'AREA': ''\n  }\n}];"
+      },
+      "id": "create-headers",
+      "name": "Create Headers",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, 0]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Create Analysis Sheet').first().json.spreadsheetId }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{ $('Create Analysis Sheet').first().json.sheetId }}",
+          "mode": "id"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            { "id": "SUMMARY", "displayName": "SUMMARY", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "FULL CONVERSATION", "displayName": "FULL CONVERSATION", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "AREA", "displayName": "AREA", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "append-headers",
+      "name": "Append Headers",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [2200, 0],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "cred-google-sheets",
+          "name": "Google Sheets OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const outputItems = [];\nconst conversationsData = $('Format for LLM').all();\n\nfor (const item of conversationsData) {\n  const conversation = item.json;\n  let conversationText = '';\n\n  for (const message of conversation.conversationHistory) {\n    const date = new Date(message.timestamp);\n    const formattedDate = date.toLocaleDateString('en-US', {\n      day: '2-digit',\n      month: '2-digit',\n      year: 'numeric'\n    });\n    const formattedTime = date.toLocaleTimeString('en-US', {\n      hour: '2-digit',\n      minute: '2-digit',\n      second: '2-digit'\n    });\n    const roleLabel = message.role.toUpperCase();\n    conversationText += `**[${roleLabel}] (${formattedDate}, ${formattedTime}):**\\n`;\n    conversationText += `${message.content}\\n`;\n    conversationText += '---\\n\\n';\n  }\n\n  outputItems.push({\n    json: {\n      ...$input.first().json,\n      'FULL CONVERSATION': conversationText.trim()\n    }\n  });\n}\n\nreturn outputItems;"
+      },
+      "id": "conversation-to-text",
+      "name": "Conversation to Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2420, 0]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Create Analysis Sheet').first().json.spreadsheetId }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{ $('Create Analysis Sheet').first().json.sheetId }}",
+          "mode": "id"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {
+            "SUMMARY": "={{ $json.SUMMARY }}",
+            "FULL CONVERSATION": "={{ $json['FULL CONVERSATION'] }}",
+            "AREA": "={{ $json.AREA }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "SUMMARY", "displayName": "SUMMARY", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "FULL CONVERSATION", "displayName": "FULL CONVERSATION", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "AREA", "displayName": "AREA", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "update-rows",
+      "name": "Update Rows",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [2640, 0],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "cred-google-sheets",
+          "name": "Google Sheets OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "wait-node",
+      "name": "Wait",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [2860, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $('Create Analysis Sheet').first().json.spreadsheetId }}:batchUpdate",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"requests\": [\n    {\n      \"repeatCell\": {\n        \"range\": {\n          \"sheetId\": {{ $('Create Analysis Sheet').first().json.sheetId }},\n          \"startRowIndex\": 0,\n          \"endRowIndex\": 1\n        },\n        \"cell\": {\n          \"userEnteredFormat\": {\n            \"backgroundColor\": { \"red\": 0.471, \"green\": 0.565, \"blue\": 0.612 },\n            \"textFormat\": {\n              \"foregroundColor\": { \"red\": 1.0, \"green\": 1.0, \"blue\": 1.0 },\n              \"fontSize\": 10,\n              \"bold\": true\n            },\n            \"horizontalAlignment\": \"CENTER\",\n            \"verticalAlignment\": \"MIDDLE\"\n          }\n        },\n        \"fields\": \"userEnteredFormat\"\n      }\n    },\n    {\n      \"updateDimensionProperties\": {\n        \"range\": {\n          \"sheetId\": {{ $('Create Analysis Sheet').first().json.sheetId }},\n          \"dimension\": \"COLUMNS\",\n          \"startIndex\": 0,\n          \"endIndex\": 1\n        },\n        \"properties\": { \"pixelSize\": 150 },\n        \"fields\": \"pixelSize\"\n      }\n    },\n    {\n      \"updateDimensionProperties\": {\n        \"range\": {\n          \"sheetId\": {{ $('Create Analysis Sheet').first().json.sheetId }},\n          \"dimension\": \"COLUMNS\",\n          \"startIndex\": 1,\n          \"endIndex\": 2\n        },\n        \"properties\": { \"pixelSize\": 800 },\n        \"fields\": \"pixelSize\"\n      }\n    },\n    {\n      \"updateDimensionProperties\": {\n        \"range\": {\n          \"sheetId\": {{ $('Create Analysis Sheet').first().json.sheetId }},\n          \"dimension\": \"COLUMNS\",\n          \"startIndex\": 2,\n          \"endIndex\": 3\n        },\n        \"properties\": { \"pixelSize\": 150 },\n        \"fields\": \"pixelSize\"\n      }\n    },\n    {\n      \"addBanding\": {\n        \"bandedRange\": {\n          \"range\": {\n            \"sheetId\": {{ $('Create Analysis Sheet').first().json.sheetId }},\n            \"startRowIndex\": 1,\n            \"startColumnIndex\": 0,\n            \"endColumnIndex\": 3\n          },\n          \"rowProperties\": {\n            \"firstBandColor\": { \"red\": 1.0, \"green\": 1.0, \"blue\": 1.0 },\n            \"secondBandColor\": { \"red\": 0.922, \"green\": 0.937, \"blue\": 0.945 }\n          }\n        }\n      }\n    },\n    {\n      \"repeatCell\": {\n        \"range\": {\n          \"sheetId\": {{ $('Create Analysis Sheet').first().json.sheetId }},\n          \"startRowIndex\": 1,\n          \"startColumnIndex\": 0,\n          \"endColumnIndex\": 3\n        },\n        \"cell\": {\n          \"userEnteredFormat\": {\n            \"wrapStrategy\": \"WRAP\",\n            \"verticalAlignment\": \"TOP\"\n          }\n        },\n        \"fields\": \"userEnteredFormat(wrapStrategy,verticalAlignment)\"\n      }\n    },\n    {\n      \"updateBorders\": {\n        \"range\": {\n          \"sheetId\": {{ $('Create Analysis Sheet').first().json.sheetId }},\n          \"startRowIndex\": 0,\n          \"startColumnIndex\": 0,\n          \"endColumnIndex\": 3\n        },\n        \"top\":    { \"style\": \"SOLID\", \"width\": 1, \"color\": { \"red\": 0.7, \"green\": 0.7, \"blue\": 0.7 } },\n        \"bottom\": { \"style\": \"SOLID\", \"width\": 1, \"color\": { \"red\": 0.7, \"green\": 0.7, \"blue\": 0.7 } },\n        \"left\":   { \"style\": \"SOLID\", \"width\": 1, \"color\": { \"red\": 0.7, \"green\": 0.7, \"blue\": 0.7 } },\n        \"right\":  { \"style\": \"SOLID\", \"width\": 1, \"color\": { \"red\": 0.7, \"green\": 0.7, \"blue\": 0.7 } },\n        \"innerHorizontal\": { \"style\": \"SOLID\", \"width\": 1, \"color\": { \"red\": 0.85, \"green\": 0.85, \"blue\": 0.85 } },\n        \"innerVertical\":   { \"style\": \"SOLID\", \"width\": 1, \"color\": { \"red\": 0.85, \"green\": 0.85, \"blue\": 0.85 } }\n      }\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "format-sheet",
+      "name": "Format Sheet",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3080, 0],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "cred-google-sheets",
+          "name": "Google Sheets OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Email Analysis\n\nReads emails from a Gmail label, reconstructs full conversation threads,\nand exports them to a formatted Google Sheets report.\n\nTrigger: Manual (click Execute)\n\nWhat happens:\n1. Fetches all messages matching a label\n2. Deduplicates by thread ID\n3. Gets full thread data and individual messages\n4. Groups messages back into threads sorted by date\n5. Cleans email bodies (removes quoted replies)\n6. Identifies support vs. user roles\n7. Creates a new sheet tab with timestamp name\n8. Writes each conversation as a formatted row\n9. Styles the sheet (headers, banding, borders, column widths)\n\nColumns: SUMMARY | FULL CONVERSATION | AREA\n\nCredentials: Gmail OAuth2, Google Sheets OAuth2\n\nSetup:\n- Change the label filter in 'Get Emails by Label' to match your label\n- Update supportDomains in 'Format for LLM' with your support email\n- Set your spreadsheet ID in 'Create Analysis Sheet'",
+        "width": 440,
+        "height": 620
+      },
+      "id": "note-node",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-520, -260]
+    }
+  ],
+  "connections": {
+    "When clicking 'Execute workflow'": {
+      "main": [
+        [{ "node": "Get Emails by Label", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Emails by Label": {
+      "main": [
+        [{ "node": "Remove Duplicates", "type": "main", "index": 0 }]
+      ]
+    },
+    "Remove Duplicates": {
+      "main": [
+        [{ "node": "Get Threads", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Threads": {
+      "main": [
+        [{ "node": "Thread Parser", "type": "main", "index": 0 }]
+      ]
+    },
+    "Thread Parser": {
+      "main": [
+        [{ "node": "Get Messages", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Messages": {
+      "main": [
+        [{ "node": "Rebuild Threads", "type": "main", "index": 0 }]
+      ]
+    },
+    "Rebuild Threads": {
+      "main": [
+        [{ "node": "Format for LLM", "type": "main", "index": 0 }]
+      ]
+    },
+    "Format for LLM": {
+      "main": [
+        [{ "node": "Create Analysis Sheet", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Analysis Sheet": {
+      "main": [
+        [{ "node": "Create Headers", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Headers": {
+      "main": [
+        [{ "node": "Append Headers", "type": "main", "index": 0 }]
+      ]
+    },
+    "Append Headers": {
+      "main": [
+        [{ "node": "Conversation to Text", "type": "main", "index": 0 }]
+      ]
+    },
+    "Conversation to Text": {
+      "main": [
+        [{ "node": "Update Rows", "type": "main", "index": 0 }]
+      ]
+    },
+    "Update Rows": {
+      "main": [
+        [{ "node": "Wait", "type": "main", "index": 0 }]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [{ "node": "Format Sheet", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "active": false,
+  "versionId": "1"
+}

@@ -1,0 +1,6 @@
+.env
+n8n_data/
+
+# Credential files may contain secrets — only track examples
+credentials/*.json
+!credentials/.gitkeep

@@ -1,0 +1,698 @@
+{
+  "id": "multi-platform-data-sync",
+  "name": "Multi-Platform Data Sync — Lead Enrichment Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "a1b0c001-0001-4000-8000-000000000001",
+      "name": "⏰ Every Hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [220, 460]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": "https://docs.google.com/spreadsheets/d/YOUR_SPREADSHEET_ID/edit"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gid=0",
+          "cachedResultName": "Leads"
+        },
+        "options": {}
+      },
+      "id": "a1b0c001-0001-4000-8000-000000000002",
+      "name": "📊 Read Leads from Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [440, 460],
+      "credentials": {
+        "googleApi": {
+          "id": "cred-google-sheets",
+          "name": "Google Sheets Service Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "filter-new-leads",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "new",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1b0c001-0001-4000-8000-000000000003",
+      "name": "🔍 Filter New Leads",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [660, 460]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.enrichment-service.com/v1/company?domain={{ $json.company_domain }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "a1b0c001-0001-4000-8000-000000000004",
+      "name": "🔎 Enrich Company Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 460],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cred-enrichment-api",
+          "name": "Enrichment API Key"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Merge original lead data with enrichment results\nconst lead = $('🔍 Filter New Leads').item.json;\nconst enrichment = $input.item.json;\n\n// Calculate lead score based on enrichment data\nlet score = 0;\n\n// Company size scoring\nconst employees = enrichment.employees || 0;\nif (employees > 500) score += 30;\nelse if (employees > 100) score += 20;\nelse if (employees > 20) score += 10;\n\n// Industry scoring (high-value verticals)\nconst highValueIndustries = ['technology', 'finance', 'healthcare', 'saas'];\nconst industry = (enrichment.industry || '').toLowerCase();\nif (highValueIndustries.includes(industry)) score += 25;\nelse score += 10;\n\n// Data completeness scoring\nif (enrichment.linkedin_url) score += 10;\nif (enrichment.phone) score += 10;\nif (enrichment.revenue) score += 15;\n\nreturn {\n  json: {\n    // Original lead fields\n    name: lead.name,\n    email: lead.email,\n    company: lead.company,\n    company_domain: lead.company_domain,\n    source: lead.source,\n    row_number: lead.row_number,\n\n    // Enriched fields\n    industry: enrichment.industry || 'Unknown',\n    employees: employees,\n    revenue: enrichment.revenue || 'Unknown',\n    linkedin_url: enrichment.linkedin_url || '',\n    phone: enrichment.phone || '',\n    headquarters: enrichment.headquarters || '',\n    description: enrichment.description || '',\n\n    // Computed fields\n    lead_score: score,\n    qualification: score >= 50 ? 'Qualified' : 'Needs Nurturing',\n    enriched_at: new Date().toISOString(),\n    synced: true\n  }\n};"
+      },
+      "id": "a1b0c001-0001-4000-8000-000000000005",
+      "name": "⚙️ Transform & Score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 460]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-lead-score",
+              "leftValue": "={{ $json.lead_score }}",
+              "rightValue": 50,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1b0c001-0001-4000-8000-000000000006",
+      "name": "🎯 Qualified?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1320, 460]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "table": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        },
+        "options": {}
+      },
+      "id": "a1b0c001-0001-4000-8000-000000000007",
+      "name": "🟢 Airtable: Hot Leads",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [1540, 340],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "cred-airtable",
+          "name": "Airtable Personal Access Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "table": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        },
+        "options": {}
+      },
+      "id": "a1b0c001-0001-4000-8000-000000000008",
+      "name": "🟡 Airtable: Nurturing",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [1540, 580],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "cred-airtable",
+          "name": "Airtable Personal Access Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "append"
+      },
+      "id": "a1b0c001-0001-4000-8000-000000000009",
+      "name": "🔀 Merge Results",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.1,
+      "position": [1760, 460]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": "https://docs.google.com/spreadsheets/d/YOUR_SPREADSHEET_ID/edit"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gid=0",
+          "cachedResultName": "Leads"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "email": "={{ $json.email }}",
+            "status": "synced",
+            "synced_at": "={{ $json.enriched_at }}",
+            "lead_score": "={{ $json.lead_score }}",
+            "qualification": "={{ $json.qualification }}"
+          },
+          "matchingColumns": ["email"],
+          "schema": [
+            { "id": "email", "displayName": "email", "required": false, "defaultMatch": true, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "status", "displayName": "status", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false },
+            { "id": "synced_at", "displayName": "synced_at", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false },
+            { "id": "lead_score", "displayName": "lead_score", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": false },
+            { "id": "qualification", "displayName": "qualification", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": false }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1b0c001-0001-4000-8000-000000000010",
+      "name": "📝 Update Sheet Status",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [1980, 460],
+      "credentials": {
+        "googleApi": {
+          "id": "cred-google-sheets",
+          "name": "Google Sheets Service Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "channel": "#leads-pipeline",
+        "text": "=🔄 *Lead Sync Complete*\n\n📊 {{ $input.all().length }} leads processed and synced to Airtable\n⏰ {{ $now.format('yyyy-MM-dd HH:mm') }}\n\nLeads have been scored, enriched, and routed to the appropriate Airtable tables.\nCheck Airtable for the latest updates!",
+        "otherOptions": {}
+      },
+      "id": "a1b0c001-0001-4000-8000-000000000011",
+      "name": "💬 Notify Team",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [2200, 460],
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "cred-slack",
+          "name": "Slack OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Lead Enrichment Pipeline\n\nWhat this workflow does:\n1. Runs every hour\n2. Reads new leads from Google Sheets\n3. Filters unprocessed leads (status = \"new\")\n4. Enriches each lead with company data via API\n5. Calculates a lead score\n6. Routes by score: Hot (50+) vs Nurturing\n7. Syncs to separate Airtable tables\n8. Updates Google Sheets with sync status\n9. Sends summary to Slack\n\nRequired sheet columns:\nname | email | company | company_domain | source | status\n\nTo test: add rows with status = \"new\" to your sheet,\nor run with the pinned demo data.",
+        "width": 440,
+        "height": 440,
+        "color": 4
+      },
+      "id": "a1b0c001-0001-4000-8000-000000000012",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [120, -40]
+    },
+    {
+      "parameters": {
+        "content": "### Lead Scoring Logic\n\nCompany Size:\n- 500+ employees: +30 pts\n- 100-500: +20 pts\n- 20-100: +10 pts\n\nIndustry (high-value):\n- Tech / Finance / Healthcare / SaaS: +25\n- Other: +10\n\nData Quality:\n- Has LinkedIn: +10\n- Has Phone: +10\n- Has Revenue: +15\n\nThreshold: score 50+ = Qualified",
+        "width": 300,
+        "height": 360,
+        "color": 5
+      },
+      "id": "a1b0c001-0001-4000-8000-000000000013",
+      "name": "Sticky Note1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1020, 20]
+    },
+    {
+      "parameters": {
+        "content": "### Airtable Routing\n\nScore 50+ -> Hot Leads table\nReady for sales outreach\n\nScore below 50 -> Nurturing table\nNeeds more touchpoints before sales",
+        "width": 260,
+        "height": 200,
+        "color": 3
+      },
+      "id": "a1b0c001-0001-4000-8000-000000000014",
+      "name": "Sticky Note2",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1440, 700]
+    }
+  ],
+  "connections": {
+    "⏰ Every Hour": {
+      "main": [
+        [
+          {
+            "node": "📊 Read Leads from Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📊 Read Leads from Sheet": {
+      "main": [
+        [
+          {
+            "node": "🔍 Filter New Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔍 Filter New Leads": {
+      "main": [
+        [
+          {
+            "node": "🔎 Enrich Company Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔎 Enrich Company Data": {
+      "main": [
+        [
+          {
+            "node": "⚙️ Transform & Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚙️ Transform & Score": {
+      "main": [
+        [
+          {
+            "node": "🎯 Qualified?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🎯 Qualified?": {
+      "main": [
+        [
+          {
+            "node": "🟢 Airtable: Hot Leads",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "🟡 Airtable: Nurturing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🟢 Airtable: Hot Leads": {
+      "main": [
+        [
+          {
+            "node": "🔀 Merge Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🟡 Airtable: Nurturing": {
+      "main": [
+        [
+          {
+            "node": "🔀 Merge Results",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "🔀 Merge Results": {
+      "main": [
+        [
+          {
+            "node": "📝 Update Sheet Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📝 Update Sheet Status": {
+      "main": [
+        [
+          {
+            "node": "💬 Notify Team",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {
+    "📊 Read Leads from Sheet": [
+      {
+        "json": {
+          "name": "Sarah Chen",
+          "email": "sarah@techcorp.io",
+          "company": "TechCorp",
+          "company_domain": "techcorp.io",
+          "source": "Website Form",
+          "status": "new",
+          "row_number": 2
+        }
+      },
+      {
+        "json": {
+          "name": "James Rodriguez",
+          "email": "james@financeplus.com",
+          "company": "FinancePlus",
+          "company_domain": "financeplus.com",
+          "source": "LinkedIn Ad",
+          "status": "new",
+          "row_number": 3
+        }
+      },
+      {
+        "json": {
+          "name": "Maria Gonzalez",
+          "email": "maria@smallbiz.net",
+          "company": "SmallBiz Co",
+          "company_domain": "smallbiz.net",
+          "source": "Referral",
+          "status": "new",
+          "row_number": 4
+        }
+      },
+      {
+        "json": {
+          "name": "Alex Kim",
+          "email": "alex@healthstart.com",
+          "company": "HealthStart",
+          "company_domain": "healthstart.com",
+          "source": "Webinar",
+          "status": "synced",
+          "row_number": 5
+        }
+      },
+      {
+        "json": {
+          "name": "David Patel",
+          "email": "david@saasworks.io",
+          "company": "SaaSWorks",
+          "company_domain": "saasworks.io",
+          "source": "Cold Outreach",
+          "status": "new",
+          "row_number": 6
+        }
+      }
+    ],
+    "🔎 Enrich Company Data": [
+      {
+        "json": {
+          "company": "TechCorp",
+          "domain": "techcorp.io",
+          "industry": "Technology",
+          "employees": 850,
+          "revenue": "$50M",
+          "linkedin_url": "https://linkedin.com/company/techcorp",
+          "phone": "+1-555-0100",
+          "headquarters": "San Francisco, CA",
+          "description": "Enterprise SaaS solutions for data management"
+        }
+      },
+      {
+        "json": {
+          "company": "FinancePlus",
+          "domain": "financeplus.com",
+          "industry": "Finance",
+          "employees": 200,
+          "revenue": "$15M",
+          "linkedin_url": "https://linkedin.com/company/financeplus",
+          "phone": "+1-555-0200",
+          "headquarters": "New York, NY",
+          "description": "Fintech platform for small business lending"
+        }
+      },
+      {
+        "json": {
+          "company": "SmallBiz Co",
+          "domain": "smallbiz.net",
+          "industry": "Retail",
+          "employees": 12,
+          "revenue": "",
+          "linkedin_url": "",
+          "phone": "",
+          "headquarters": "Austin, TX",
+          "description": "Local retail store chain"
+        }
+      },
+      {
+        "json": {
+          "company": "SaaSWorks",
+          "domain": "saasworks.io",
+          "industry": "SaaS",
+          "employees": 150,
+          "revenue": "$8M",
+          "linkedin_url": "https://linkedin.com/company/saasworks",
+          "phone": "+1-555-0400",
+          "headquarters": "Seattle, WA",
+          "description": "Workflow automation tools for enterprises"
+        }
+      }
+    ],
+    "🟢 Airtable: Hot Leads": [
+      {
+        "json": {
+          "id": "rec9xTq3kLmN1aB2c",
+          "name": "Sarah Chen",
+          "email": "sarah@techcorp.io",
+          "company": "TechCorp",
+          "company_domain": "techcorp.io",
+          "source": "Website Form",
+          "row_number": 2,
+          "industry": "Technology",
+          "employees": 850,
+          "revenue": "$50M",
+          "linkedin_url": "https://linkedin.com/company/techcorp",
+          "phone": "+1-555-0100",
+          "headquarters": "San Francisco, CA",
+          "description": "Enterprise SaaS solutions for data management",
+          "lead_score": 90,
+          "qualification": "Qualified",
+          "enriched_at": "2026-02-27T10:00:00.000Z",
+          "synced": true
+        }
+      },
+      {
+        "json": {
+          "id": "recA2bC3dEfG4hI5j",
+          "name": "James Rodriguez",
+          "email": "james@financeplus.com",
+          "company": "FinancePlus",
+          "company_domain": "financeplus.com",
+          "source": "LinkedIn Ad",
+          "row_number": 3,
+          "industry": "Finance",
+          "employees": 200,
+          "revenue": "$15M",
+          "linkedin_url": "https://linkedin.com/company/financeplus",
+          "phone": "+1-555-0200",
+          "headquarters": "New York, NY",
+          "description": "Fintech platform for small business lending",
+          "lead_score": 80,
+          "qualification": "Qualified",
+          "enriched_at": "2026-02-27T10:00:00.000Z",
+          "synced": true
+        }
+      },
+      {
+        "json": {
+          "id": "recK6lM7nO8pQ9rS0",
+          "name": "David Patel",
+          "email": "david@saasworks.io",
+          "company": "SaaSWorks",
+          "company_domain": "saasworks.io",
+          "source": "Cold Outreach",
+          "row_number": 6,
+          "industry": "SaaS",
+          "employees": 150,
+          "revenue": "$8M",
+          "linkedin_url": "https://linkedin.com/company/saasworks",
+          "phone": "+1-555-0400",
+          "headquarters": "Seattle, WA",
+          "description": "Workflow automation tools for enterprises",
+          "lead_score": 80,
+          "qualification": "Qualified",
+          "enriched_at": "2026-02-27T10:00:00.000Z",
+          "synced": true
+        }
+      }
+    ],
+    "🟡 Airtable: Nurturing": [
+      {
+        "json": {
+          "id": "recT1uV2wX3yZ4aB5",
+          "name": "Maria Gonzalez",
+          "email": "maria@smallbiz.net",
+          "company": "SmallBiz Co",
+          "company_domain": "smallbiz.net",
+          "source": "Referral",
+          "row_number": 4,
+          "industry": "Retail",
+          "employees": 12,
+          "revenue": "Unknown",
+          "linkedin_url": "",
+          "phone": "",
+          "headquarters": "Austin, TX",
+          "description": "Local retail store chain",
+          "lead_score": 10,
+          "qualification": "Needs Nurturing",
+          "enriched_at": "2026-02-27T10:00:00.000Z",
+          "synced": true
+        }
+      }
+    ],
+    "📝 Update Sheet Status": [
+      {
+        "json": {
+          "email": "sarah@techcorp.io",
+          "status": "synced",
+          "synced_at": "2026-02-27T10:00:00.000Z",
+          "lead_score": 90,
+          "qualification": "Qualified"
+        }
+      },
+      {
+        "json": {
+          "email": "james@financeplus.com",
+          "status": "synced",
+          "synced_at": "2026-02-27T10:00:00.000Z",
+          "lead_score": 80,
+          "qualification": "Qualified"
+        }
+      },
+      {
+        "json": {
+          "email": "maria@smallbiz.net",
+          "status": "synced",
+          "synced_at": "2026-02-27T10:00:00.000Z",
+          "lead_score": 10,
+          "qualification": "Needs Nurturing"
+        }
+      },
+      {
+        "json": {
+          "email": "david@saasworks.io",
+          "status": "synced",
+          "synced_at": "2026-02-27T10:00:00.000Z",
+          "lead_score": 80,
+          "qualification": "Qualified"
+        }
+      }
+    ],
+    "💬 Notify Team": [
+      {
+        "json": {
+          "ok": true,
+          "channel": "#leads-pipeline",
+          "ts": "1740650400.000100",
+          "message": "🔄 *Lead Sync Complete*\n\n📊 4 leads processed and synced to Airtable\n⏰ 2026-02-27 10:00\n\nLeads have been scored, enriched, and routed to the appropriate Airtable tables.\nCheck Airtable for the latest updates!"
+        }
+      }
+    ]
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "active": false,
+  "versionId": "1"
+}

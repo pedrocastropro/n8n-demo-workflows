@@ -1,0 +1,539 @@
+{
+  "id": "resilient-api-pipeline",
+  "name": "Resilient API Pipeline — Error Handling & Fallback",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 4
+            }
+          ]
+        }
+      },
+      "id": "c3d2e003-0001-4000-8000-000000000001",
+      "name": "⏰ Every 4 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 460]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.external-service.com/v1/data",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "options": {
+          "timeout": 15000
+        },
+        "retry": {
+          "maxRetries": 3,
+          "retryInterval": 2000,
+          "retryOnTimeout": true
+        }
+      },
+      "id": "c3d2e003-0001-4000-8000-000000000002",
+      "name": "🌐 Fetch API Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 460],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cred-external-api",
+          "name": "External API Key"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Validate and transform API response\nconst response = $input.item.json;\n\n// Check for error indicators in the response\nif (response.error || response.statusCode >= 400) {\n  throw new Error(`API returned error: ${response.error || response.statusMessage || 'Unknown'}`);\n}\n\n// Validate required fields\nconst data = response.data || response;\nif (!data) {\n  throw new Error('Empty response from API');\n}\n\nconst items = Array.isArray(data) ? data : [data];\n\nreturn items.map(item => ({\n  json: {\n    id: item.id || `auto_${Date.now()}`,\n    metric: item.metric || item.name || 'unknown',\n    value: Number(item.value) || 0,\n    unit: item.unit || '',\n    source: 'primary_api',\n    fetched_at: new Date().toISOString(),\n    api_timestamp: response.timestamp || new Date().toISOString(),\n    is_anomaly: item.value != null && Math.abs(Number(item.value)) > (item.threshold || 100)\n  }\n}));"
+      },
+      "id": "c3d2e003-0001-4000-8000-000000000003",
+      "name": "⚙️ Validate & Transform",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [740, 340]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": "https://docs.google.com/spreadsheets/d/YOUR_SPREADSHEET_ID/edit"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gid=0",
+          "cachedResultName": "API Data"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        },
+        "options": {}
+      },
+      "id": "c3d2e003-0001-4000-8000-000000000004",
+      "name": "📊 Sheets: Store Data",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [960, 340],
+      "credentials": {
+        "googleApi": {
+          "id": "cred-google-sheets",
+          "name": "Google Sheets Service Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-anomaly",
+              "leftValue": "={{ $json.is_anomaly }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c3d2e003-0001-4000-8000-000000000005",
+      "name": "🎯 Anomaly Detected?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1180, 340]
+    },
+    {
+      "parameters": {
+        "channel": "#api-alerts",
+        "text": "=⚠️ *Anomaly Detected*\n\n📊 Metric: *{{ $json.metric }}*\n📈 Value: {{ $json.value }} {{ $json.unit }}\n🕐 {{ $json.fetched_at }}\n🔗 Source: {{ $json.source }}\n\nThis value exceeds the expected threshold. Please investigate.",
+        "otherOptions": {}
+      },
+      "id": "c3d2e003-0001-4000-8000-000000000006",
+      "name": "⚠️ Slack: Anomaly Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1400, 240],
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "cred-slack",
+          "name": "Slack OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Extract error details from the failed HTTP request\nconst error = $input.item.json;\n\nreturn {\n  json: {\n    error_type: error.code || error.statusCode || 'UNKNOWN_ERROR',\n    error_message: error.message || error.statusMessage || JSON.stringify(error).substring(0, 500),\n    endpoint: 'primary_api',\n    url: 'https://api.external-service.com/v1/data',\n    occurred_at: new Date().toISOString(),\n    retries_exhausted: 3,\n    workflow: 'Resilient API Pipeline'\n  }\n};"
+      },
+      "id": "c3d2e003-0001-4000-8000-000000000007",
+      "name": "❌ Format Error Details",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [740, 620]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.fallback-service.com/v1/data",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "c3d2e003-0001-4000-8000-000000000008",
+      "name": "🔄 Fallback API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [960, 620],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cred-external-api",
+          "name": "External API Key"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": "https://docs.google.com/spreadsheets/d/YOUR_SPREADSHEET_ID/edit"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gid=1",
+          "cachedResultName": "Error Log"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        },
+        "options": {}
+      },
+      "id": "c3d2e003-0001-4000-8000-000000000009",
+      "name": "📋 Sheets: Error Log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [1200, 740],
+      "credentials": {
+        "googleApi": {
+          "id": "cred-google-sheets",
+          "name": "Google Sheets Service Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "channel": "#api-alerts",
+        "text": "=🚨 *API Failure — Both Endpoints Down*\n\n❌ Primary API: Failed after 3 retries\n❌ Fallback API: Also failed\n\n📋 Error: {{ $json.error_message }}\n🕐 {{ $json.occurred_at }}\n\n🔧 *Action Required:* Check API status and investigate immediately.",
+        "otherOptions": {}
+      },
+      "id": "c3d2e003-0001-4000-8000-000000000010",
+      "name": "🚨 Slack: API Failure",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1420, 740],
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "cred-slack",
+          "name": "Slack OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "c3d2e003-0001-4000-8000-000000000011",
+      "name": "⚡ Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [240, 900]
+    },
+    {
+      "parameters": {
+        "channel": "#api-alerts",
+        "text": "=🔥 *Workflow Error — Resilient API Pipeline*\n\n💥 An unhandled error occurred in the workflow.\n\n📋 Error: {{ $json.execution?.error?.message || 'Unknown error' }}\n🆔 Execution: {{ $json.execution?.id || 'N/A' }}\n🕐 {{ $now.format('yyyy-MM-dd HH:mm:ss') }}\n\n🔗 Check the execution log for details.",
+        "otherOptions": {}
+      },
+      "id": "c3d2e003-0001-4000-8000-000000000012",
+      "name": "🔥 Slack: Workflow Error",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [460, 900],
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "cred-slack",
+          "name": "Slack OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Resilient API Pipeline\n\nDemonstrates robust error handling patterns.\n\nWhat happens:\n1. Polls an API every 4 hours\n2. Primary call retries 3 times automatically\n3. Validates and transforms the response\n4. Stores data in Google Sheets\n5. Checks for anomalies against thresholds\n6. If primary fails, routes to a fallback API\n7. If both fail, logs the error and alerts the team\n8. A global error trigger catches anything unexpected\n\nError handling patterns:\n- Retry with backoff (node-level)\n- Error output routing (branch on failure)\n- Fallback endpoint (redundancy)\n- Error logging (audit trail)\n- Multi-level Slack notifications",
+        "width": 440,
+        "height": 460,
+        "color": 4
+      },
+      "id": "c3d2e003-0001-4000-8000-000000000013",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [100, -80]
+    },
+    {
+      "parameters": {
+        "content": "### Retry and Fallback Logic\n\nPrimary API fails ->\n3 retries (2s apart) ->\nStill fails -> error output\n\nError output ->\nFormat error details ->\nFallback API call\n\nFallback succeeds ->\nRoutes back to Transform\n\nFallback also fails ->\nLog error + alert team on Slack",
+        "width": 280,
+        "height": 300,
+        "color": 3
+      },
+      "id": "c3d2e003-0001-4000-8000-000000000014",
+      "name": "Sticky Note1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [640, 820]
+    },
+    {
+      "parameters": {
+        "content": "### Global Error Handler\n\nCatches any unhandled error\nin the entire workflow.\n\nActs as a safety net so the team\nalways gets notified, even when\nsomething unexpected breaks.",
+        "width": 260,
+        "height": 200,
+        "color": 7
+      },
+      "id": "c3d2e003-0001-4000-8000-000000000015",
+      "name": "Sticky Note2",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [120, 1060]
+    }
+  ],
+  "connections": {
+    "⏰ Every 4 Hours": {
+      "main": [
+        [
+          {
+            "node": "🌐 Fetch API Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🌐 Fetch API Data": {
+      "main": [
+        [
+          {
+            "node": "⚙️ Validate & Transform",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "❌ Format Error Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚙️ Validate & Transform": {
+      "main": [
+        [
+          {
+            "node": "📊 Sheets: Store Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📊 Sheets: Store Data": {
+      "main": [
+        [
+          {
+            "node": "🎯 Anomaly Detected?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🎯 Anomaly Detected?": {
+      "main": [
+        [
+          {
+            "node": "⚠️ Slack: Anomaly Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "❌ Format Error Details": {
+      "main": [
+        [
+          {
+            "node": "🔄 Fallback API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔄 Fallback API": {
+      "main": [
+        [
+          {
+            "node": "⚙️ Validate & Transform",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "📋 Sheets: Error Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📋 Sheets: Error Log": {
+      "main": [
+        [
+          {
+            "node": "🚨 Slack: API Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚡ Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "🔥 Slack: Workflow Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {
+    "🌐 Fetch API Data": [
+      {
+        "json": {
+          "timestamp": "2026-03-02T12:00:00.000Z",
+          "data": [
+            {
+              "id": "metric-001",
+              "metric": "cpu_usage",
+              "value": 45.2,
+              "unit": "%",
+              "threshold": 100
+            },
+            {
+              "id": "metric-002",
+              "metric": "memory_usage",
+              "value": 72.8,
+              "unit": "%",
+              "threshold": 100
+            },
+            {
+              "id": "metric-003",
+              "metric": "api_latency",
+              "value": 234,
+              "unit": "ms",
+              "threshold": 200
+            },
+            {
+              "id": "metric-004",
+              "metric": "error_rate",
+              "value": 0.3,
+              "unit": "%",
+              "threshold": 100
+            }
+          ]
+        }
+      }
+    ],
+    "📊 Sheets: Store Data": [
+      {
+        "json": {
+          "id": "metric-001",
+          "metric": "cpu_usage",
+          "value": 45.2,
+          "unit": "%",
+          "source": "primary_api",
+          "fetched_at": "2026-03-02T12:00:05.000Z",
+          "api_timestamp": "2026-03-02T12:00:00.000Z",
+          "is_anomaly": false
+        }
+      },
+      {
+        "json": {
+          "id": "metric-002",
+          "metric": "memory_usage",
+          "value": 72.8,
+          "unit": "%",
+          "source": "primary_api",
+          "fetched_at": "2026-03-02T12:00:05.000Z",
+          "api_timestamp": "2026-03-02T12:00:00.000Z",
+          "is_anomaly": false
+        }
+      },
+      {
+        "json": {
+          "id": "metric-003",
+          "metric": "api_latency",
+          "value": 234,
+          "unit": "ms",
+          "source": "primary_api",
+          "fetched_at": "2026-03-02T12:00:05.000Z",
+          "api_timestamp": "2026-03-02T12:00:00.000Z",
+          "is_anomaly": true
+        }
+      },
+      {
+        "json": {
+          "id": "metric-004",
+          "metric": "error_rate",
+          "value": 0.3,
+          "unit": "%",
+          "source": "primary_api",
+          "fetched_at": "2026-03-02T12:00:05.000Z",
+          "api_timestamp": "2026-03-02T12:00:00.000Z",
+          "is_anomaly": false
+        }
+      }
+    ],
+    "⚠️ Slack: Anomaly Alert": [
+      {
+        "json": {
+          "ok": true,
+          "channel": "#api-alerts",
+          "ts": "1740916805.000100",
+          "message": "⚠️ *Anomaly Detected*\n\n📊 Metric: *api_latency*\n📈 Value: 234 ms\n🕐 2026-03-02T12:00:05.000Z\n🔗 Source: primary_api\n\nThis value exceeds the expected threshold. Please investigate."
+        }
+      }
+    ],
+    "📋 Sheets: Error Log": [
+      {
+        "json": {
+          "error_type": "ECONNREFUSED",
+          "error_message": "Connection refused — the target API is unreachable",
+          "endpoint": "primary_api",
+          "url": "https://api.external-service.com/v1/data",
+          "occurred_at": "2026-03-02T16:00:10.000Z",
+          "retries_exhausted": 3,
+          "workflow": "Resilient API Pipeline"
+        }
+      }
+    ],
+    "🚨 Slack: API Failure": [
+      {
+        "json": {
+          "ok": true,
+          "channel": "#api-alerts",
+          "ts": "1740931210.000200",
+          "message": "🚨 *API Failure — Both Endpoints Down*\n\n❌ Primary API: Failed after 3 retries\n❌ Fallback API: Also failed\n\n📋 Error: Connection refused — the target API is unreachable\n🕐 2026-03-02T16:00:10.000Z\n\n🔧 *Action Required:* Check API status and investigate immediately."
+        }
+      }
+    ]
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "active": false,
+  "versionId": "1"
+}

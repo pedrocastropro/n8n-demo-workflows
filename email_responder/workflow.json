@@ -1,0 +1,789 @@
+{
+  "id": "email-responder-001",
+  "name": "Email Responder",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger-node",
+      "name": "When clicking 'Execute workflow'",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "filters": {
+          "labelIds": ["INBOX"],
+          "readStatus": "unread"
+        }
+      },
+      "id": "get-unread",
+      "name": "Get Unread Inbox",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [220, 0],
+      "alwaysOutputData": false,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cred-gmail",
+          "name": "Gmail OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "compare": "selectedFields",
+        "fieldsToCompare": "threadId",
+        "options": {}
+      },
+      "id": "remove-duplicates",
+      "name": "Remove Duplicates",
+      "type": "n8n-nodes-base.removeDuplicates",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "resource": "thread",
+        "operation": "get",
+        "threadId": "={{ $json.threadId }}",
+        "options": {}
+      },
+      "id": "get-threads",
+      "name": "Get Threads",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [660, 0],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cred-gmail",
+          "name": "Gmail OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const allMessages = [];\n\nfor (const item of $input.all()) {\n  const thread = item.json;\n\n  if (thread && Array.isArray(thread.messages)) {\n    const messagesFromThisThread = thread.messages.map(msg => {\n      return {\n        json: {\n          messageId: msg.id,\n          threadId: msg.threadId\n        }\n      };\n    });\n    allMessages.push(...messagesFromThisThread);\n  }\n}\n\nreturn allMessages;"
+      },
+      "id": "thread-parser",
+      "name": "Thread Parser",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "messageId": "={{ $json.messageId }}",
+        "simple": false,
+        "options": {}
+      },
+      "id": "get-messages",
+      "name": "Get Messages",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1100, 0],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cred-gmail",
+          "name": "Gmail OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const threadsMap = new Map();\n\nfor (const item of $input.all()) {\n  const message = item.json;\n  const threadId = message.threadId;\n\n  if (!threadId) continue;\n\n  if (threadsMap.has(threadId)) {\n    threadsMap.get(threadId).messages.push(message);\n  } else {\n    threadsMap.set(threadId, {\n      threadId: threadId,\n      messages: [message]\n    });\n  }\n}\n\nfor (const thread of threadsMap.values()) {\n  thread.messages.sort((a, b) => {\n    return parseInt(a.internalDate) - parseInt(b.internalDate);\n  });\n}\n\nconst finalThreads = Array.from(threadsMap.values());\nreturn finalThreads.map(thread => ({ json: thread }));"
+      },
+      "id": "rebuild-threads",
+      "name": "Rebuild Threads",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 0]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const thread = $json;\n\nif (!thread?.messages?.[0]?.from?.value?.[0]?.address) {\n  return {\n    json: {\n      error: \"Invalid message structure or missing sender address.\",\n      threadId: thread?.threadId || 'unknown'\n    }\n  };\n}\n\n// Configure your support email domains here\nconst supportDomains = ['support@yourcompany.com', '@yourcompany.com'];\n\nfunction isSupport(email) {\n  return supportDomains.some(domain => email.includes(domain));\n}\n\nfunction getCleanText(text) {\n  if (!text) return '';\n  const splitters = [\n    '\\nOn ',\n    '\\nEl ',\n    '\\n\\n-----Original Message-----',\n    '\\n\\n-----Mensaje original-----',\n    '\\nFrom: ',\n  ];\n  let cleanText = text;\n  for (const splitter of splitters) {\n    const position = cleanText.indexOf(splitter);\n    if (position > 0) {\n      cleanText = cleanText.substring(0, position);\n    }\n  }\n  return cleanText.trim();\n}\n\nconst conversationHistory = thread.messages.map(message => {\n  const currentSenderEmail = message?.from?.value?.[0]?.address;\n  const rawBody = message.text || '';\n  const cleanBody = getCleanText(rawBody);\n  const role = isSupport(currentSenderEmail) ? 'support' : 'user';\n  return {\n    role,\n    content: cleanBody,\n    timestamp: message.date || message.timestamp || new Date().toISOString()\n  };\n});\n\nconst firstSenderEmail = thread.messages[0].from.value[0].address;\nconst initiatedBy = isSupport(firstSenderEmail) ? 'support' : 'user';\n\nconst clientEmails = thread.messages\n  .map(m => m.from.value[0].address)\n  .filter(email => !isSupport(email));\nconst identifiedUser = clientEmails[0] || firstSenderEmail;\n\nreturn {\n  json: {\n    threadId: thread.threadId,\n    subject: thread.subject || thread.messages[0]?.subject || 'No subject',\n    initiatedBy: initiatedBy,\n    identifiedUser: identifiedUser,\n    conversationHistory: conversationHistory\n  }\n};"
+      },
+      "id": "format-for-llm",
+      "name": "Format for LLM",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 0]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Subject: {{ $json.subject }}\nMessage: {{ $json.conversationHistory[0].content }}\n\nJSON: {\"area\": \"string\", \"sub_area\": [\"string\"], \"confidence\": 0.0-1.0}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "Task: Classify support emails into module (area) and functionality (sub_area).\n\n## MODULES\naccounts: login, registration, password_reset, profile, permissions\nbilling: invoices, payments, subscriptions, refunds, pricing\nproduct: features, bugs, integrations, api, performance\nsupport: general_inquiry, feedback, complaint, escalation\n\n## RULES\n1. Multiple sub_areas only if clearly applicable\n2. Use ONLY listed sub_areas\n3. Confidence: 0.0 to 1.0 (if < 0.7 -> area = \"unrecognized\")\n\n## EXAMPLES\n\"How do I reset my password?\" -> {\"area\":\"accounts\",\"sub_area\":[\"password_reset\"],\"confidence\":0.95}\n\"My invoice is wrong\" -> {\"area\":\"billing\",\"sub_area\":[\"invoices\"],\"confidence\":0.9}\n\"The API keeps returning 500\" -> {\"area\":\"product\",\"sub_area\":[\"api\",\"bugs\"],\"confidence\":0.95}\n\"General question\" -> {\"area\":\"unrecognized\",\"sub_area\":[],\"confidence\":0.4}\n\nOUTPUT (JSON only):\n{\"area\":\"string\",\"sub_area\":[\"array\"],\"confidence\":0.0-1.0}"
+        }
+      },
+      "id": "area-agent",
+      "name": "Area",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [1980, -200],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4o-mini"
+        },
+        "options": {
+          "responseFormat": "json_object"
+        }
+      },
+      "id": "openai-area",
+      "name": "OpenAI Chat Model - Area",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [1980, -400],
+      "credentials": {
+        "openAiApi": {
+          "id": "cred-openai",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"area\": \"accounts\",\n  \"sub_area\": [\"login\"],\n  \"confidence\": 0.95\n}"
+      },
+      "id": "parser-area",
+      "name": "Structured Output Parser - Area",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [2160, -400]
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map(item => {\n  const { output, ...rest } = item.json;\n  return {\n    json: {\n      ...rest,\n      area: {\n        description: output.area,\n        sub_area: output.sub_area,\n        confidence: output.confidence\n      }\n    }\n  };\n});"
+      },
+      "id": "extract-area",
+      "name": "Extract Area",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2340, -200]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Subject: {{ $json.subject }}\n{{ $json.conversationHistory[0].content }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "Classify user intent in support emails.\n\nINTENTS:\nhow_to: Learn how to do something\nnot_working: Something broken/error\ninformation: What/where is something\nother: Unclear intent\n\nRULES: One intent | Confidence 0.0-1.0 | <0.6=other\n\nEXAMPLES:\n\"How do I configure X?\" -> {\"intent\":\"how_to\",\"confidence\":0.95}\n\"Getting an error when saving\" -> {\"intent\":\"not_working\",\"confidence\":0.95}\n\"Where can I find the settings?\" -> {\"intent\":\"information\",\"confidence\":0.9}\n\"Hello\" -> {\"intent\":\"other\",\"confidence\":0.3}\n\nOUTPUT: {\"intent\":\"string\",\"confidence\":0.0-1.0}"
+        }
+      },
+      "id": "intent-agent",
+      "name": "Intent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [1980, 0]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4o-mini"
+        },
+        "options": {}
+      },
+      "id": "openai-intent",
+      "name": "OpenAI Chat Model - Intent",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [1980, 200],
+      "credentials": {
+        "openAiApi": {
+          "id": "cred-openai",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"intent\": \"how_to\",\n  \"confidence\": 0.95\n}"
+      },
+      "id": "parser-intent",
+      "name": "Structured Output Parser - Intent",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [2160, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map(item => {\n  const { output, ...rest } = item.json;\n  return {\n    json: {\n      ...rest,\n      intent: {\n        description: output.intent,\n        confidence: output.confidence\n      }\n    }\n  };\n});"
+      },
+      "id": "extract-intent",
+      "name": "Extract Intent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2340, 0]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Count messages in this conversation and determine status:\n{{ JSON.stringify($json.conversationHistory) }}\n\nRULES:\n1. Count total messages\n2. If count = 1 -> new\n3. If count >= 2:\n   - Check last message\n   - If from support AND contains answer/solution -> solved\n   - If from support AND ends with \"?\" -> waiting\n   - If from user AND says \"thanks\"/\"perfect\"/\"works\" -> solved\n   - If from user AND mentions problem persists -> reopened\n\nRespond with JSON:\n{\"status\": \"string\", \"confidence\": number}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "Classify conversation status by counting messages and checking last sender.\n\nSTATUS:\nnew: 1 message only (user, no support reply)\nwaiting: 2+ messages, last from support with question\nsolved: 2+ messages, last from support with solution OR user confirms (\"thanks\",\"perfect\",\"works\",\"resolved\")\nreopened: User says \"again\",\"still not working\",\"same issue\",\"happening again\"\n\nEXAMPLES:\n[user:\"Can't log in\"] -> {\"status\":\"new\",\"confidence\":0.95}\n[user:\"Not working\", support:\"What error do you see?\"] -> {\"status\":\"waiting\",\"confidence\":0.95}\n[user:\"Not working\", support:\"Try this: link\"] -> {\"status\":\"solved\",\"confidence\":0.9}\n[user:\"Problem X\", support:\"Fixed\", user:\"Thanks!\"] -> {\"status\":\"solved\",\"confidence\":0.95}\n[user:\"Problem X\", support:\"Fixed\", user:\"Still not working\"] -> {\"status\":\"reopened\",\"confidence\":0.95}\n\nOUTPUT: {\"status\":\"string\",\"confidence\":0.0-1.0}"
+        }
+      },
+      "id": "status-agent",
+      "name": "Status",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [1980, 400]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4o-mini"
+        },
+        "options": {}
+      },
+      "id": "openai-status",
+      "name": "OpenAI Chat Model - Status",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [1980, 600],
+      "credentials": {
+        "openAiApi": {
+          "id": "cred-openai",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"status\": \"new\",\n  \"confidence\": 0.95\n}"
+      },
+      "id": "parser-status",
+      "name": "Structured Output Parser - Status",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [2160, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map(item => {\n  const { output, ...rest } = item.json;\n  return {\n    json: {\n      ...rest,\n      status: {\n        value: output.status,\n        confidence: output.confidence\n      }\n    }\n  };\n});"
+      },
+      "id": "extract-status",
+      "name": "Extract Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2340, 400]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "numberInputs": 4,
+        "options": {}
+      },
+      "id": "merge-node",
+      "name": "Merge",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [2640, 0]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "numberInputs": 2,
+        "options": {}
+      },
+      "id": "conversation-meta",
+      "name": "Conversation + Meta",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [2900, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build search query from area classification\nconst item = $json;\nconst area = item.area?.description || 'general';\nconst subAreas = item.area?.sub_area || [];\nconst searchQuery = subAreas.length > 0\n  ? `${area}-${subAreas[0]}`\n  : area;\n\nreturn [{\n  json: {\n    ...item,\n    searchQuery: searchQuery\n  }\n}];"
+      },
+      "id": "build-search-query",
+      "name": "Build Search Query",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3120, 0]
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "queryString": "={{ $json.searchQuery }}",
+        "limit": 3,
+        "options": {}
+      },
+      "id": "search-drive",
+      "name": "Search Files in Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [3340, 0],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "cred-gdrive",
+          "name": "Google Drive OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": "={{ $json.id }}",
+        "options": {}
+      },
+      "id": "download-file",
+      "name": "Download File",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [3560, 0],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "cred-gdrive",
+          "name": "Google Drive OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "text",
+        "options": {}
+      },
+      "id": "file-to-text",
+      "name": "File to Text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [3780, 0]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "numberInputs": 2,
+        "options": {}
+      },
+      "id": "merge-docs-conversation",
+      "name": "Merge Docs + Conversation",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [4000, 200]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=## User question\nSubject: {{ $json.subject }}\n{{ $json.conversationHistory[$json.conversationHistory.length - 1].content }}\n\n## Classification\nArea: {{ $json.area?.description }} | Sub-area: {{ $json.area?.sub_area }}\nIntent: {{ $json.intent?.description }}\n\n## Documentation\n{{ $json.data }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are a knowledge base search agent. Given a user's support question and documentation text, find the most relevant sections that answer the question.\n\nRULES:\n1. Extract only sections directly relevant to the user's question\n2. Include step-by-step instructions if available\n3. Quote the documentation — do not invent information\n4. If no relevant content is found, return an empty searchResults array\n5. Return up to 3 most relevant results\n\nOUTPUT (JSON only):\n{\n  \"searchResults\": [\n    {\n      \"title\": \"Section title from the document\",\n      \"content\": \"Relevant text from the document\",\n      \"relevance\": 0.0-1.0\n    }\n  ]\n}"
+        }
+      },
+      "id": "kb-search-agent",
+      "name": "KB Search Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [4300, 200],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4o-mini"
+        },
+        "options": {}
+      },
+      "id": "openai-kb",
+      "name": "OpenAI Chat Model - KB",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [4300, 0],
+      "credentials": {
+        "openAiApi": {
+          "id": "cred-openai",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"searchResults\": [\n    {\n      \"title\": \"How to reset password\",\n      \"content\": \"Go to Settings > Security > Reset Password...\",\n      \"relevance\": 0.95\n    }\n  ]\n}"
+      },
+      "id": "parser-kb",
+      "name": "Structured Output Parser - KB",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [4500, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map(item => {\n  const { output, ...rest } = item.json;\n  return {\n    json: {\n      ...rest,\n      searchResults: output?.searchResults || []\n    }\n  };\n});"
+      },
+      "id": "extract-kb",
+      "name": "Extract KB Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4660, 200]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "numberInputs": 2,
+        "options": {}
+      },
+      "id": "merge-all",
+      "name": "Merge All",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [4900, 400]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=## Email thread\nSubject: {{ $json.subject }}\nUser: {{ $json.identifiedUser }}\nThread ID: {{ $json.threadId }}\n\n## Conversation history\n{{ JSON.stringify($json.conversationHistory) }}\n\n## Classification\nArea: {{ $json.area?.description }} ({{ $json.area?.sub_area }})\nIntent: {{ $json.intent?.description }}\nStatus: {{ $json.status?.value }}\n\n## Knowledge base results\n{{ JSON.stringify($json.searchResults) }}\n\nGenerate a professional support response.",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are a professional support agent. Write a helpful response to the user's support email using the conversation history, classification, and knowledge base results provided.\n\nRULES:\n1. Be professional, empathetic, and concise\n2. Use information from the knowledge base when available — cite it naturally\n3. If no KB results are relevant, provide general guidance based on the classification\n4. ALWAYS reply in the same language the user wrote in\n5. Include clear next steps or action items when applicable\n6. If status is 'solved', write a closing/follow-up message\n7. If status is 'reopened', acknowledge the issue persists and escalate if needed\n8. Sign off with a professional signature\n\nOUTPUT (JSON only):\n{\n  \"subject\": \"Re: <original subject>\",\n  \"body\": \"The full email response body in plain text\",\n  \"signature\": \"Best regards,\\nSupport Team\"\n}"
+        }
+      },
+      "id": "response-agent",
+      "name": "Response Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [5200, 400],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "gpt-4o"
+        },
+        "options": {}
+      },
+      "id": "openai-response",
+      "name": "OpenAI Chat Model - Response",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [5200, 200],
+      "credentials": {
+        "openAiApi": {
+          "id": "cred-openai",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"subject\": \"Re: Can't log in to my account\",\n  \"body\": \"Hi there,\\n\\nThank you for reaching out...\",\n  \"signature\": \"Best regards,\\nSupport Team\"\n}"
+      },
+      "id": "parser-response",
+      "name": "Structured Output Parser - Response",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [5400, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map(item => {\n  const { output, ...rest } = item.json;\n  return {\n    json: {\n      ...rest,\n      response: {\n        subject: output?.subject || 'Re: ' + (rest.subject || 'Support Request'),\n        body: output?.body || '',\n        signature: output?.signature || 'Best regards,\\nSupport Team'\n      }\n    }\n  };\n});"
+      },
+      "id": "extract-response",
+      "name": "Extract Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5560, 400]
+    },
+    {
+      "parameters": {
+        "resource": "draft",
+        "subject": "={{ $json.response.subject }}",
+        "message": "={{ $json.response.body + '\\n\\n' + $json.response.signature }}",
+        "options": {
+          "threadId": "={{ $json.threadId }}"
+        }
+      },
+      "id": "create-draft",
+      "name": "Create Gmail Draft",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [5780, 400],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cred-gmail",
+          "name": "Gmail OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## BLOCK 1: MAIL -> CONVERSATION\n1. Fetches unread inbox messages\n2. Multiple unread messages may belong to the same thread\n3. Gets the full threads for each unique thread ID\n4. Extracts individual messages from threads\n5. Rebuilds threads with messages sorted by date\n6. Cleans text and formats for LLM processing",
+        "height": 800,
+        "width": 1600
+      },
+      "id": "note-pipeline",
+      "name": "Note - Block 1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-80, -300]
+    },
+    {
+      "parameters": {
+        "content": "## BLOCK 2: INTENT RESOLVER\nThree parallel AI agents classify each conversation:\n\n- **Area**: Which product module the email is about\n- **Intent**: What the user wants (how_to, not_working, information, other)\n- **Status**: Conversation state (new, waiting, solved, reopened)\n\nAll three results are merged back with the original conversation data.",
+        "height": 1100,
+        "width": 1200,
+        "color": 2
+      },
+      "id": "note-classification",
+      "name": "Note - Block 2",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1860, -500]
+    },
+    {
+      "parameters": {
+        "content": "## BLOCK 3: KNOWLEDGE BASE SEARCH\nSearches Google Drive for documentation matching the classified area,\ndownloads and converts to text, then uses an AI agent to find\nrelevant sections for the user's question.",
+        "height": 700,
+        "width": 2200,
+        "color": 4
+      },
+      "id": "note-kb",
+      "name": "Note - Block 3",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [2820, -300]
+    },
+    {
+      "parameters": {
+        "content": "## BLOCK 5: RESPONSE BUILDER\nUses an AI agent (gpt-4o) with conversation context,\nclassification, and KB results to generate a professional\nsupport response. Creates a Gmail draft in the original thread.",
+        "height": 700,
+        "width": 1200,
+        "color": 6
+      },
+      "id": "note-response",
+      "name": "Note - Block 5",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [5100, -100]
+    }
+  ],
+  "connections": {
+    "When clicking 'Execute workflow'": {
+      "main": [
+        [{ "node": "Get Unread Inbox", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Unread Inbox": {
+      "main": [
+        [{ "node": "Remove Duplicates", "type": "main", "index": 0 }]
+      ]
+    },
+    "Remove Duplicates": {
+      "main": [
+        [{ "node": "Get Threads", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Threads": {
+      "main": [
+        [{ "node": "Thread Parser", "type": "main", "index": 0 }]
+      ]
+    },
+    "Thread Parser": {
+      "main": [
+        [{ "node": "Get Messages", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Messages": {
+      "main": [
+        [{ "node": "Rebuild Threads", "type": "main", "index": 0 }]
+      ]
+    },
+    "Rebuild Threads": {
+      "main": [
+        [{ "node": "Format for LLM", "type": "main", "index": 0 }]
+      ]
+    },
+    "Format for LLM": {
+      "main": [
+        [
+          { "node": "Area", "type": "main", "index": 0 },
+          { "node": "Intent", "type": "main", "index": 0 },
+          { "node": "Status", "type": "main", "index": 0 },
+          { "node": "Merge", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Area": {
+      "main": [
+        [{ "node": "Extract Area", "type": "main", "index": 0 }]
+      ]
+    },
+    "Extract Area": {
+      "main": [
+        [{ "node": "Merge", "type": "main", "index": 1 }]
+      ]
+    },
+    "Intent": {
+      "main": [
+        [{ "node": "Extract Intent", "type": "main", "index": 0 }]
+      ]
+    },
+    "Extract Intent": {
+      "main": [
+        [{ "node": "Merge", "type": "main", "index": 2 }]
+      ]
+    },
+    "Status": {
+      "main": [
+        [{ "node": "Extract Status", "type": "main", "index": 0 }]
+      ]
+    },
+    "Extract Status": {
+      "main": [
+        [{ "node": "Merge", "type": "main", "index": 3 }]
+      ]
+    },
+    "OpenAI Chat Model - Area": {
+      "ai_languageModel": [
+        [{ "node": "Area", "type": "ai_languageModel", "index": 0 }]
+      ]
+    },
+    "Structured Output Parser - Area": {
+      "ai_outputParser": [
+        [{ "node": "Area", "type": "ai_outputParser", "index": 0 }]
+      ]
+    },
+    "OpenAI Chat Model - Intent": {
+      "ai_languageModel": [
+        [{ "node": "Intent", "type": "ai_languageModel", "index": 0 }]
+      ]
+    },
+    "Structured Output Parser - Intent": {
+      "ai_outputParser": [
+        [{ "node": "Intent", "type": "ai_outputParser", "index": 0 }]
+      ]
+    },
+    "OpenAI Chat Model - Status": {
+      "ai_languageModel": [
+        [{ "node": "Status", "type": "ai_languageModel", "index": 0 }]
+      ]
+    },
+    "Structured Output Parser - Status": {
+      "ai_outputParser": [
+        [{ "node": "Status", "type": "ai_outputParser", "index": 0 }]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          { "node": "Conversation + Meta", "type": "main", "index": 0 },
+          { "node": "Merge All", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Conversation + Meta": {
+      "main": [
+        [{ "node": "Build Search Query", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Search Query": {
+      "main": [
+        [
+          { "node": "Search Files in Drive", "type": "main", "index": 0 },
+          { "node": "Merge Docs + Conversation", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Search Files in Drive": {
+      "main": [
+        [{ "node": "Download File", "type": "main", "index": 0 }]
+      ]
+    },
+    "Download File": {
+      "main": [
+        [{ "node": "File to Text", "type": "main", "index": 0 }]
+      ]
+    },
+    "File to Text": {
+      "main": [
+        [{ "node": "Merge Docs + Conversation", "type": "main", "index": 1 }]
+      ]
+    },
+    "Merge Docs + Conversation": {
+      "main": [
+        [{ "node": "KB Search Agent", "type": "main", "index": 0 }]
+      ]
+    },
+    "KB Search Agent": {
+      "main": [
+        [{ "node": "Extract KB Results", "type": "main", "index": 0 }]
+      ]
+    },
+    "Extract KB Results": {
+      "main": [
+        [{ "node": "Merge All", "type": "main", "index": 1 }]
+      ]
+    },
+    "OpenAI Chat Model - KB": {
+      "ai_languageModel": [
+        [{ "node": "KB Search Agent", "type": "ai_languageModel", "index": 0 }]
+      ]
+    },
+    "Structured Output Parser - KB": {
+      "ai_outputParser": [
+        [{ "node": "KB Search Agent", "type": "ai_outputParser", "index": 0 }]
+      ]
+    },
+    "Merge All": {
+      "main": [
+        [{ "node": "Response Agent", "type": "main", "index": 0 }]
+      ]
+    },
+    "Response Agent": {
+      "main": [
+        [{ "node": "Extract Response", "type": "main", "index": 0 }]
+      ]
+    },
+    "Extract Response": {
+      "main": [
+        [{ "node": "Create Gmail Draft", "type": "main", "index": 0 }]
+      ]
+    },
+    "OpenAI Chat Model - Response": {
+      "ai_languageModel": [
+        [{ "node": "Response Agent", "type": "ai_languageModel", "index": 0 }]
+      ]
+    },
+    "Structured Output Parser - Response": {
+      "ai_outputParser": [
+        [{ "node": "Response Agent", "type": "ai_outputParser", "index": 0 }]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "active": false,
+  "versionId": "2"
+}
